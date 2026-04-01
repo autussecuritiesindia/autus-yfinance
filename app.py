@@ -3,151 +3,129 @@ from flask_cors import CORS
 import yfinance as yf
 
 app = Flask(__name__)
-CORS(app)  # Allow all origins — required for github.io
+CORS(app)
 
-# ── Symbol maps ─────────────────────────────────────────────────
-# Your stooq-style symbols → Yahoo Finance symbols
+# Stooq-style symbol → Yahoo Finance symbol
 INDICES_MAP = {
-    # Indian indices
-    '^nsei':     '^NSEI',
-    '^bsesn':    '^BSESN',
-    '^nsebank':  '^NSEBANK',
-    '^cnxit':    '^CNXIT',
-    '^cnxpharma':'^CNXPHARMA',
-    '^cnxauto':  '^CNXAUTO',
-    '^cnxfmcg':  '^CNXFMCG',
-    '^cnxmetal': '^CNXMETAL',
-    '^cnxpsubn': '^CNXPSUBN',
-    '^indiavix': '^INDIAVIX',
-    # Global indices
-    '^spx':      '^GSPC',
-    '^ndx':      '^NDX',
-    '^dji':      '^DJI',
-    '^n225':     '^N225',
-    '^hsi':      '^HSI',
-    '^dax':      '^GDAXI',
-    '^ftse':     '^FTSE',
-    '^ssec':     '000001.SS',
-    '^fchi':     '^FCHI',
-    # Currencies & commodities
-    'usd/inr':   'USDINR=X',
-    'eur/inr':   'EURINR=X',
-    'gbp/inr':   'GBPINR=X',
-    'xau/usd':   'GC=F',
-    'xag/usd':   'SI=F',
-    'cl.f':      'CL=F',
-    'btc/usd':   'BTC-USD',
+    '^nsei':      '^NSEI',
+    '^bsesn':     '^BSESN',
+    '^nsebank':   '^NSEBANK',
+    '^cnxit':     '^CNXIT',
+    '^cnxpharma': '^CNXPHARMA',
+    '^cnxauto':   '^CNXAUTO',
+    '^cnxfmcg':   '^CNXFMCG',
+    '^cnxmetal':  '^CNXMETAL',
+    '^cnxpsubn':  '^CNXPSUBN',
+    '^indiavix':  '^INDIAVIX',
+    '^spx':       '^GSPC',
+    '^ndx':       '^NDX',
+    '^dji':       '^DJI',
+    '^n225':      '^N225',
+    '^hsi':       '^HSI',
+    '^dax':       '^GDAXI',
+    '^ftse':      '^FTSE',
+    '^ssec':      '000001.SS',
+    '^fchi':      '^FCHI',
+    'usd/inr':    'USDINR=X',
+    'eur/inr':    'EURINR=X',
+    'gbp/inr':    'GBPINR=X',
+    'xau/usd':    'GC=F',
+    'xag/usd':    'SI=F',
+    'cl.f':       'CL=F',
+    'btc/usd':    'BTC-USD',
 }
 
 def safe_float(val):
     try:
         v = float(val)
-        return round(v, 4) if v == v else None  # NaN check
+        return round(v, 4) if v == v else None
     except:
         return None
 
-# ── /indices ────────────────────────────────────────────────────
-@app.route('/indices')
-def indices():
-    syms_param = request.args.get('s', '')
-    if not syms_param:
-        return jsonify({'ok': False, 'error': 'Missing s= parameter'}), 400
-
-    requested = [s.strip().lower() for s in syms_param.split(',') if s.strip()]
-    yahoo_syms = [INDICES_MAP.get(s, s) for s in requested]
-
+def fetch_info(yahoo_sym):
+    """Fetch fast_info for a single symbol, returns dict or None."""
     try:
-        tickers = yf.Tickers(' '.join(yahoo_syms))
-        data = []
-        for i, req_sym in enumerate(requested):
-            yahoo_sym = yahoo_syms[i]
-            try:
-                info = tickers.tickers[yahoo_sym].fast_info
-                price      = safe_float(info.last_price)
-                prev_close = safe_float(info.previous_close)
-                if price is None or price <= 0:
-                    continue
-                base = prev_close if prev_close and prev_close > 0 else price
-                chg  = round(price - base, 4)
-                pct  = round((price - base) / base * 100, 4) if base > 0 else 0
-                data.append({
-                    'sym':       req_sym,
-                    'val':       price,
-                    'chg':       chg,
-                    'pct':       pct,
-                    'prevClose': base,
-                })
-            except Exception as e:
-                print(f'[INDICES] Skip {req_sym}: {e}')
-                continue
-
-        if not data:
-            return jsonify({'ok': False, 'error': 'No data from yfinance'})
-
-        return jsonify({'ok': True, 'source': 'yfinance', 'count': len(data), 'data': data})
-
+        t = yf.Ticker(yahoo_sym)
+        info = t.fast_info
+        price = safe_float(info.last_price)
+        prev  = safe_float(info.previous_close)
+        if not price or price <= 0:
+            return None
+        base = prev if prev and prev > 0 else price
+        return {
+            'price':     price,
+            'prevClose': base,
+            'changeAbs': round(price - base, 4),
+            'changePct': round((price - base) / base * 100, 4) if base > 0 else 0,
+        }
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        print(f'[WARN] {yahoo_sym}: {e}')
+        return None
 
 
-# ── /prices ─────────────────────────────────────────────────────
-# Called with selected client's symbols only (10-20 max)
-@app.route('/prices')
-def prices():
-    syms_param = request.args.get('s', '')
-    if not syms_param:
-        return jsonify({'ok': False, 'error': 'Missing s= parameter'}), 400
-
-    symbols = [s.strip() for s in syms_param.split(',') if s.strip()]
-    if not symbols:
-        return jsonify({'ok': False, 'error': 'No symbols'}), 400
-
-    # Ensure .NS suffix for NSE stocks
-    yahoo_syms = []
-    for s in symbols:
-        if '.' not in s:
-            yahoo_syms.append(s + '.NS')
-        else:
-            yahoo_syms.append(s)
-
-    try:
-        tickers = yf.Tickers(' '.join(yahoo_syms))
-        data = []
-        for i, orig in enumerate(symbols):
-            yahoo_sym = yahoo_syms[i]
-            try:
-                info = tickers.tickers[yahoo_sym].fast_info
-                price      = safe_float(info.last_price)
-                prev_close = safe_float(info.previous_close)
-                if price is None or price <= 0:
-                    continue
-                base      = prev_close if prev_close and prev_close > 0 else price
-                change    = round(price - base, 4)
-                change_pct = round((price - base) / base * 100, 4) if base > 0 else 0
-                data.append({
-                    'symbol':    yahoo_sym,
-                    'price':     price,
-                    'prevClose': base,
-                    'changeAbs': change,
-                    'changePct': change_pct,
-                })
-            except Exception as e:
-                print(f'[PRICES] Skip {orig}: {e}')
-                continue
-
-        if not data:
-            return jsonify({'ok': False, 'error': 'No data from yfinance'})
-
-        return jsonify({'ok': True, 'source': 'yfinance', 'count': len(data), 'data': data})
-
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
-# ── /health ──────────────────────────────────────────────────────
 @app.route('/health')
 def health():
-    return jsonify({'ok': True, 'service': 'autus-yfinance', 'version': 1})
+    return jsonify({'ok': True, 'service': 'autus-yfinance', 'version': 2})
+
+
+@app.route('/indices')
+def indices():
+    syms_param = request.args.get('s', '').strip()
+    if not syms_param:
+        return jsonify({'ok': False, 'error': 'Missing s='}), 400
+
+    requested = [s.strip().lower() for s in syms_param.split(',') if s.strip()]
+    data = []
+
+    for req_sym in requested:
+        yahoo_sym = INDICES_MAP.get(req_sym)
+        if not yahoo_sym:
+            print(f'[INDICES] No mapping for {req_sym}')
+            continue
+        result = fetch_info(yahoo_sym)
+        if result:
+            data.append({
+                'sym':       req_sym,
+                'val':       result['price'],
+                'chg':       result['changeAbs'],
+                'pct':       result['changePct'],
+                'prevClose': result['prevClose'],
+            })
+        else:
+            print(f'[INDICES] No data for {req_sym} ({yahoo_sym})')
+
+    if not data:
+        return jsonify({'ok': False, 'error': 'No data returned from yfinance'})
+
+    return jsonify({'ok': True, 'source': 'yfinance', 'count': len(data), 'data': data})
+
+
+@app.route('/prices')
+def prices():
+    syms_param = request.args.get('s', '').strip()
+    if not syms_param:
+        return jsonify({'ok': False, 'error': 'Missing s='}), 400
+
+    symbols = [s.strip() for s in syms_param.split(',') if s.strip()]
+    data = []
+
+    for sym in symbols:
+        # Add .NS suffix for NSE stocks if no exchange suffix present
+        yahoo_sym = sym if '.' in sym or '=' in sym or sym.startswith('^') else sym + '.NS'
+        result = fetch_info(yahoo_sym)
+        if result:
+            data.append({
+                'symbol':    yahoo_sym,
+                'price':     result['price'],
+                'prevClose': result['prevClose'],
+                'changeAbs': result['changeAbs'],
+                'changePct': result['changePct'],
+            })
+
+    if not data:
+        return jsonify({'ok': False, 'error': 'No data returned from yfinance'})
+
+    return jsonify({'ok': True, 'source': 'yfinance', 'count': len(data), 'data': data})
 
 
 if __name__ == '__main__':
