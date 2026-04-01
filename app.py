@@ -7,43 +7,52 @@ CORS(app)
 
 # Stooq-style symbol → Yahoo Finance symbol
 INDICES_MAP = {
-    '^nsei':      '^NSEI',
-    '^bsesn':     '^BSESN',
-    '^nsebank':   '^NSEBANK',
-    '^cnxit':     '^CNXIT',
-    '^cnxpharma': '^CNXPHARMA',
-    '^cnxauto':   '^CNXAUTO',
-    '^cnxfmcg':   '^CNXFMCG',
-    '^cnxmetal':  '^CNXMETAL',
-    '^cnxpsubn':  '^CNXPSUBN',
-    '^indiavix':  '^INDIAVIX',
-    '^spx':       '^GSPC',
-    '^ndx':       '^NDX',
-    '^dji':       '^DJI',
-    '^n225':      '^N225',
-    '^hsi':       '^HSI',
-    '^dax':       '^GDAXI',
-    '^ftse':      '^FTSE',
-    '^ssec':      '000001.SS',
-    '^fchi':      '^FCHI',
-    'usd/inr':    'USDINR=X',
-    'eur/inr':    'EURINR=X',
-    'gbp/inr':    'GBPINR=X',
-    'xau/usd':    'GC=F',
-    'xag/usd':    'SI=F',
-    'cl.f':       'CL=F',
-    'btc/usd':    'BTC-USD',
+    '^nsei':       '^NSEI',
+    '^bsesn':      '^BSESN',
+    '^nsebank':    '^NSEBANK',
+    '^cnxit':      '^CNXIT',
+    '^cnxpharma':  '^CNXPHARMA',
+    '^cnxauto':    '^CNXAUTO',
+    '^cnxfmcg':    '^CNXFMCG',
+    '^cnxmetal':   '^CNXMETAL',
+    '^cnxpsubn':   '^CNXPSUBN',
+    '^cnxsc':      '^CNXSC',        # NIFTY SmallCap 100
+    '^cnxmidcap':  '^CNXMIDCAP',    # NIFTY MidCap 100
+    '^indiavix':   '^INDIAVIX',
+    '^spx':        '^GSPC',
+    '^ndx':        '^NDX',
+    '^dji':        '^DJI',
+    '^n225':       '^N225',
+    '^hsi':        '^HSI',
+    '^dax':        '^GDAXI',
+    '^ftse':       '^FTSE',
+    '^ssec':       '000001.SS',
+    '^fchi':       '^FCHI',
+    'usd/inr':     'USDINR=X',
+    'eur/inr':     'EURINR=X',
+    'gbp/inr':     'GBPINR=X',
+    'xau/usd':     'GC=F',
+    'xag/usd':     'SI=F',
+    'cl.f':        'CL=F',
+    'btc/usd':     'BTC-USD',
+}
+
+# NSE symbols that need special handling
+SYMBOL_FIXES = {
+    'GVT&D':    'GETD.NS',
+    'GET&D':    'GETD.NS',
+    'GVT&D.NS': 'GETD.NS',
+    'GET&D.NS': 'GETD.NS',
 }
 
 def safe_float(val):
     try:
         v = float(val)
-        return round(v, 4) if v == v else None
+        return round(v, 4) if v == v else None  # NaN check
     except:
         return None
 
 def fetch_info(yahoo_sym):
-    """Fetch fast_info for a single symbol, returns dict or None."""
     try:
         t = yf.Ticker(yahoo_sym)
         info = t.fast_info
@@ -62,11 +71,9 @@ def fetch_info(yahoo_sym):
         print(f'[WARN] {yahoo_sym}: {e}')
         return None
 
-
 @app.route('/health')
 def health():
-    return jsonify({'ok': True, 'service': 'autus-yfinance', 'version': 2})
-
+    return jsonify({'ok': True, 'service': 'autus-yfinance', 'version': 3})
 
 @app.route('/indices')
 def indices():
@@ -92,13 +99,11 @@ def indices():
                 'prevClose': result['prevClose'],
             })
         else:
-            print(f'[INDICES] No data for {req_sym} ({yahoo_sym})')
+            print(f'[INDICES] No data: {req_sym} ({yahoo_sym})')
 
     if not data:
-        return jsonify({'ok': False, 'error': 'No data returned from yfinance'})
-
+        return jsonify({'ok': False, 'error': 'No data from yfinance'})
     return jsonify({'ok': True, 'source': 'yfinance', 'count': len(data), 'data': data})
-
 
 @app.route('/prices')
 def prices():
@@ -110,8 +115,14 @@ def prices():
     data = []
 
     for sym in symbols:
-        # Add .NS suffix for NSE stocks if no exchange suffix present
-        yahoo_sym = sym if '.' in sym or '=' in sym or sym.startswith('^') else sym + '.NS'
+        # Apply known symbol fixes first
+        fixed = SYMBOL_FIXES.get(sym, sym)
+        # Add .NS suffix for bare NSE symbols
+        if '.' not in fixed and '=' not in fixed and not fixed.startswith('^'):
+            yahoo_sym = fixed + '.NS'
+        else:
+            yahoo_sym = fixed
+
         result = fetch_info(yahoo_sym)
         if result:
             data.append({
@@ -121,12 +132,23 @@ def prices():
                 'changeAbs': result['changeAbs'],
                 'changePct': result['changePct'],
             })
+        else:
+            # Try BSE fallback for NSE failures
+            bse_sym = yahoo_sym.replace('.NS', '.BO')
+            result2 = fetch_info(bse_sym)
+            if result2:
+                data.append({
+                    'symbol':    yahoo_sym,  # return original symbol for frontend mapping
+                    'price':     result2['price'],
+                    'prevClose': result2['prevClose'],
+                    'changeAbs': result2['changeAbs'],
+                    'changePct': result2['changePct'],
+                })
+                print(f'[PRICES] BSE fallback OK: {bse_sym}')
 
     if not data:
-        return jsonify({'ok': False, 'error': 'No data returned from yfinance'})
-
+        return jsonify({'ok': False, 'error': 'No data from yfinance'})
     return jsonify({'ok': True, 'source': 'yfinance', 'count': len(data), 'data': data})
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
