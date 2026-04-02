@@ -15,9 +15,9 @@ INDICES_MAP = {
     '^cnxauto':    '^CNXAUTO',
     '^cnxfmcg':    '^CNXFMCG',
     '^cnxmetal':   '^CNXMETAL',
-    '^cnxpsubn':   '^CNXPSUBN',
+    '^cnxpsubn':   '^CNXPSUBANK',   # correct Yahoo Finance ticker
     '^cnxsc':      '^CNXSC',        # NIFTY SmallCap 100
-    '^cnxmidcap':  '^CNXMIDCAP',    # NIFTY MidCap 100
+    '^cnxmidcap':  'NIFTY_MIDCAP_100.NS',  # confirmed Yahoo Finance ticker
     '^indiavix':   '^INDIAVIX',
     '^spx':        '^GSPC',
     '^ndx':        '^NDX',
